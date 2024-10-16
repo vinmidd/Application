@@ -1,2 +1,25 @@
-This is FileA
-This is change to File
+The cost of an Oracle Database Enterprise Edition (EE) license can vary based on factors like region, specific version, and any additional options or features you may require. Oracle typically uses two licensing models for its Enterprise Edition:
+
+1. Processor-based licensing: Costs are calculated based on the number of processors (cores) in the server.
+
+
+2. Named user plus (NUP) licensing: Costs are based on the number of users who will access the database.
+
+
+
+General cost estimates:
+
+Processor-based licensing:
+
+Around $47,500 per processor.
+
+
+Named User Plus (NUP) licensing:
+
+Typically around $950 per user, with a minimum user count requirement based on the number of cores.
+
+
+
+Additionally, Oracle requires you to purchase support and updates, which is generally around 22% of the license cost per year.
+
+These figures are only estimates; for a precise quote, you'd need to contact Oracle or an authorized reseller. Costs may vary depending on discounts, region, or contract negotiations.
