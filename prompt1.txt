@@ -1,21 +1,21 @@
-From Gemini
+FYou are absolutely right. To get the most accurate and useful code from an AI assistant like Copilot, the prompt needs to be extremely precise about the internal logic and responsibilities of each component, especially how the `GraphState` (our `AgentState`) is manipulated.
 
-Okay, this is an excellent point to generate some initial code\! I'll craft a detailed prompt for Cursor IDE or GitHub Copilot, incorporating all the architectural decisions we've made, along with a suggested project folder structure.
+I will revise the detailed prompt, adding more explicit context for the `AgentState` and elaborating on the exact role and expected actions within each LangGraph node.
 
 -----
 
-### **Part 1: Detailed Prompt for AI Code Generation**
+### **Part 1: Detailed Prompt for AI Code Generation (Revised for More Viability)**
 
-**Prompt Title:** Initial Python Project Setup for Conversational AI Agent (APES PoC)
+**Prompt Title:** Initial Python Project Setup for Conversational AI Agent (APES PoC) - Detailed Implementation
 
 **Instructions for the AI Assistant:**
 
-"You are an expert Python developer tasked with bootstrapping a conversational AI agent project. Based on the following requirements, generate the initial boilerplate code, including file structures, class definitions, function stubs, and a runnable example. Prioritize modularity, clear commenting, and adherence to the specified technologies.
+"You are an expert Python developer tasked with bootstrapping a conversational AI agent project. Based on the following detailed requirements, generate the initial boilerplate code. This includes creating the specified file structures, defining classes and functions with their specific responsibilities, and providing a runnable example. Prioritize modularity, clear commenting, and strict adherence to the specified technologies and logic.
 
 -----
 
 **Project Goal:**
-Develop an AI-powered conversational agent (APES PoC) to automate Medicare ID card and Member Services inquiries by interacting with various backend non-production APIs.
+Develop an AI-powered conversational agent (APES PoC) to automate Medicare ID card and Member Services inquiries by dynamically interacting with various backend non-production APIs.
 
 **Core Technologies:**
 
@@ -28,90 +28,127 @@ Develop an AI-powered conversational agent (APES PoC) to automate Medicare ID ca
   * **Flask:** For a minimal web-based chat interface.
   * **`python-dotenv`:** For managing API keys.
 
-**Architectural Approach (LangGraph Agentic Loop):**
+**Core Agentic Workflow & State Management:**
+
+The core of this agent is a **dynamic LangGraph loop** that enables the LLM to intelligently decide its actions.
 
 1.  **`AgentState` (Pydantic `BaseModel`):**
 
-      * Central state object for the entire conversation.
-      * Must contain `messages: List[BaseMessage]` to hold the conversation history (Human, AI, Tool messages).
-      * Can optionally include other global state variables, e.g., `current_member_id: Optional[str]`.
+      * This is the central `GraphState` object for the entire conversation. It represents the *current context* being passed between nodes.
+      * **Primary Responsibility:** Its most critical field is `messages: List[BaseMessage]`. This list is the **single source of truth** for the entire conversation history, accumulating user inputs (`HumanMessage`), AI responses/thoughts (`AIMessage`), and **most importantly, the outputs from tool calls (`ToolMessage`)**.
+      * **Field Definition:**
+          * `messages: List[BaseMessage] = Field(default_factory=list, description="List of all messages in the conversation, including user input, AI responses, and tool outputs.")`
+      * **Optional Global Fields:** If there's any *critical, derived information* that needs to persist across *multiple tool calls or turns* and be easily accessible *outside* of just parsing messages (e.g., a confirmed `member_id`), you *can* add optional fields. For now, focus primarily on `messages`.
+          * `current_member_id: Optional[str] = Field(None, description="The member ID currently being discussed, once identified.")`
 
 2.  **Tools (API Wrappers as LangChain `@tool` functions):**
 
-      * Each backend API will be wrapped in a Python function.
-      * These functions must be decorated with `@tool` from `langchain_core.tools`.
-      * Each tool function requires a clear, concise, and accurate `docstring` that serves as its `description` for the LLM. This description is critical for the LLM to understand when and how to use the tool.
-      * Parameters for tool functions should use Python type hints and ideally be described in the docstring.
-      * These tools will return strings (often JSON strings) representing the API response.
-      * **Initial Tool Examples to Implement (as stubs that print API call info):**
+      * **Purpose:** These functions abstract calls to your backend Medicare APIs. The LLM will "see" these as callable functions.
+      * **Implementation:** Each API will be wrapped in a standard Python function, decorated with `@tool` from `langchain_core.tools`.
+      * **Critical `docstring` (description):** Each tool function's `docstring` is paramount. It must clearly and concisely describe:
+          * What the tool does.
+          * When the LLM should use it (its purpose/intent, e.g., "Use this tool when the user asks about the status of their ID card.").
+          * Its arguments, their types, and whether they are required (`Args:` section).
+      * **Return Type:** Tool functions should return a `str` (typically a JSON string if the API response is complex) representing the API response. This string will be embedded in a `ToolMessage`.
+      * **Initial Tool Examples to Implement (as stubs that print API call info, no real HTTP requests yet):**
           * `get_id_card_status(member_id: str, card_type: Optional[str] = None) -> str`: Retrieves ID card shipping status.
           * `request_new_id_card(member_id: str, reason: str) -> str`: Submits a request for a new ID card.
           * `get_member_benefits(member_id: str, plan_type: str) -> str`: Retrieves member benefits for a specific plan.
-          * `get_dental_coverage_status(member_id: str) -> str`: Checks dental coverage for a member.
+          * `get_dental_coverage_status(member_id: str) -> str`: Checks dental coverage status for a member.
           * `get_member_status(member_id: str) -> str`: Gets general member status.
-          * **Important:** Include a shared `api_client.py` module to encapsulate common API calling logic (e.g., base URL, headers, error handling), which the tool functions will import and use.
+      * **Shared API Client:** Include a shared `api_client.py` module to encapsulate common API calling logic (e.g., base URL, authentication headers, basic error handling). Your individual tool functions will import and use this `ApiClient`.
 
-3.  **LangGraph Nodes:**
+3.  **LangGraph Nodes & Flow:**
 
-      * **`agent_node`:** A Python function that takes `AgentState` and `config`. It will initialize the LLM (bound with all available tools) and invoke it with `state.messages`. It returns an update to `AgentState` (typically an `AIMessage` with `tool_calls` or a direct `content` response).
-      * **`tool_executor_node`:** This will be `langgraph.prebuilt.ToolNode` initialized with a list of all your LangChain `BaseTool` instances. It automatically executes `tool_calls` from the `AIMessage`.
+    The LangGraph workflow is a simple, yet powerful, agentic loop:
 
-4.  **LangGraph Routing:**
+      * **`agent_node` (Function Name: `call_agent`)**
 
-      * **Entry Point:** `agent_node`.
-      * **Conditional Edge from `agent_node`:** A router function (`should_continue`) that inspects the last message from the `agent_node`.
-          * If `last_message.tool_calls` exist, route to `tool_executor_node`.
-          * Otherwise (LLM generated a direct response), route to `END`.
-      * **Direct Edge from `tool_executor_node`:** Always route back to `agent_node` (for the LLM to process tool results and decide next steps).
+          * **Input:** Receives the current `AgentState` (specifically, `state.messages`).
+          * **Internal Logic:**
+            1.  Retrieves the LLM and the list of `all_tools` from the `config` object.
+            2.  Binds `all_tools` to the LLM instance (`llm.bind_tools(tools)`).
+            3.  Constructs the full prompt for the LLM: **`[SystemMessage(content=SYSTEM_PROMPT)] + state.messages`**. This ensures the LLM always has its core instructions and the entire conversation history.
+            4.  Invokes the LLM with this combined list of messages.
+            5.  The LLM's response will be an `AIMessage`. This `AIMessage` might contain:
+                  * `content`: A direct text response to the user.
+                  * `tool_calls`: Instructions to call one or more tools, including tool name and arguments.
+          * **Output:** Returns a dictionary `{"messages": [result_from_llm]}` to update the `AgentState`.
 
-5.  **State Persistence:**
+      * **`tool_executor_node` (Instantiate `langgraph.prebuilt.ToolNode`)**
 
-      * Use `SQLiteSaver.from_conn_string("sqlite:///conversations.db")`.
-      * Pass the `checkpointer` to `workflow.compile()`.
-      * Ensure `thread_id` is passed in `config={"configurable": {"thread_id": "YOUR_UNIQUE_ID"}}` during `app_graph.invoke()`.
+          * **Input:** Implicitly receives the `AIMessage` with `tool_calls` from the `agent_node` (because of the graph edge).
+          * **Internal Logic (Handled by `ToolNode`):**
+            1.  Identifies the `tool_calls` within the incoming `AIMessage`.
+            2.  Looks up the corresponding Python function in the `all_tools` list it was initialized with.
+            3.  Executes each tool function with the provided arguments.
+            4.  **Crucially:** Creates a `ToolMessage` for *each* tool call's output, embedding the tool's return value in the `content` field of the `ToolMessage`.
+          * **Output:** Returns a dictionary `{"messages": [new_tool_message_1, new_tool_message_2, ... ]}` to update the `AgentState`. These `ToolMessage`s are appended to `state.messages`.
 
-6.  **Flask Integration (Basic):**
+      * **Routing Function (`should_continue`)**
 
-      * A minimal Flask application (`app.py`).
-      * A root route (`/`) to render an `index.html` with a simple chat interface (input field, message display area, submit button).
-      * An API endpoint (`/chat`) that:
-          * Receives user messages.
-          * Retrieves/sets `thread_id` from session or a simple mechanism.
-          * Loads existing `chat_history` for the `thread_id` (from session or a placeholder).
-          * Initializes `AgentState` with the new message and history.
-          * Invokes `app_graph.invoke()`.
-          * Extracts the final AI response from the result.
-          * Updates `chat_history` and sends the AI response back to the frontend.
-      * Use Flask sessions to store `thread_id` and `chat_history` (for demonstration purposes; in production, `SQLiteSaver` would handle history automatically, but Flask session gives per-browser session context).
+          * **Purpose:** Determines the next step in the graph based on the LLM's last output.
+          * **Input:** Receives the current `AgentState`.
+          * **Logic:**
+            1.  Accesses the `last_message = state.messages[-1]`.
+            2.  Checks if `last_message` contains `tool_calls`.
+            3.  If `last_message.tool_calls` is `True` (meaning the LLM wants to use a tool), return the string `"call_tool"`.
+            4.  Otherwise (meaning the LLM generated a final text response), return the string `"respond"`.
 
-7.  **Environment Variables:**
+      * **LangGraph Edges:**
+
+          * `workflow.set_entry_point("agent")`
+          * `workflow.add_conditional_edges("agent", should_continue, {"call_tool": "tool_executor", "respond": END})`
+          * `workflow.add_edge("tool_executor", "agent")` (This creates the loop back to the agent after tool execution, allowing the LLM to process the tool's results).
+
+4.  **State Persistence:**
+
+      * **Mechanism:** Use `SQLiteSaver.from_conn_string("sqlite:///conversations.db")`.
+      * **Integration:** Pass the `checkpointer` instance to `workflow.compile()`.
+      * **Conversation ID:** Emphasize that a unique `thread_id` (e.g., user session ID) must be provided in `config={"configurable": {"thread_id": "YOUR_UNIQUE_ID"}}` during each `app_graph.invoke()` call. This tells `SQLSaver` which conversation's state to load/save.
+
+5.  **Flask Integration (Basic):**
+
+      * A minimal Flask application (`app.py`) for a web-based chat interface.
+      * **Root Route (`/`):** Renders a simple HTML page (`index.html`) with a chat input and message display.
+      * **API Endpoint (`/chat` - POST):**
+          * Accepts `user_message`.
+          * Gets/sets a `thread_id` from Flask session (for browser-level persistence).
+          * Initializes `AgentState` with `messages=[HumanMessage(content=user_message)]`.
+          * Invokes `app_graph.invoke()` with the `AgentState` and `config` (including `thread_id`, `llm`, `tools`).
+          * Extracts the final AI response (the `content` of the last `AIMessage` in the returned `messages` list).
+          * Returns the AI response as JSON.
+          * **Crucial for Flask:** While `SQLiteSaver` handles LangGraph's state, Flask sessions should be used to manage the `thread_id` and potentially a copy of `chat_history` for rendering purposes across HTTP requests.
+
+6.  **Environment Variables:**
 
       * Use `python-dotenv` to load `OPENAI_API_KEY` from a `.env` file.
 
-**Code Generation Instructions:**
+**Code Generation Instructions (Reiterated and Reinforced):**
 
-  * **Generate all necessary `import` statements.**
+  * **Generate all necessary `import` statements at the top of each file.**
   * **Create the specified folder structure and empty `.py` files within them.**
   * **Fill `agent/state.py` with the `AgentState` Pydantic model.**
-  * **Fill `agent/nodes.py` with the `call_agent` and `should_continue` functions.**
-  * **Fill `agent/tools/api_client.py` with a basic shared `ApiClient` class or functions (stubs for actual HTTP calls).**
-  * **Fill `agent/tools/id_card_tools.py` and `agent/tools/member_tools.py` with the `@tool` decorated stubs for the example APIs mentioned above.**
-  * **Fill `agent/__init__.py` with code to dynamically collect all `@tool` functions from the `tools` sub-directory into a list called `all_tools`.**
+  * **Fill `agent/nodes.py` with the `call_agent` and `should_continue` functions, including their internal logic as described.**
+  * **Fill `agent/tools/api_client.py` with a basic `ApiClient` class or functions (stubs for actual HTTP calls), including a `__init__` for base URL, etc., and a generic `_make_api_call` method.**
+  * **Fill `agent/tools/id_card_tools.py` and `agent/tools/member_tools.py` with the `@tool` decorated stub functions for the example APIs. Crucially, ensure each `docstring` is rich and follows the `Args:` format for clarity. These stubs should print messages indicating the API call and return dummy data.**
+  * **Fill `agent/__init__.py` with code to dynamically collect all `@tool` decorated functions from the `tools` sub-directory into a list called `all_tools`. This list will be passed to the `ToolNode` and bound to the LLM.**
   * **Fill `app.py` with:**
-      * Flask app setup.
+      * Flask app setup (including session configuration).
       * Loading environment variables.
-      * LangGraph workflow definition (`StateGraph`, `add_node`, `add_conditional_edges`, `compile`).
       * Initialization of `ChatOpenAI` and `SQLiteSaver`.
-      * The `/` and `/chat` Flask routes.
-      * A basic `index.html` in the `templates/` folder.
-  * **Fill `config.py` with placeholders for configuration variables (e.g., base URLs for APIs).**
-  * **Generate a `requirements.txt` with all necessary packages.**
+      * The complete LangGraph workflow definition (`StateGraph`, `add_node`, `add_conditional_edges`, `compile`).
+      * The `/` route to render `index.html`.
+      * The `/chat` POST API endpoint with the logic for `AgentState` initialization, `app_graph.invoke`, and response handling.
+      * A main execution block (`if __name__ == "__main__":`).
+  * **Fill `config.py` with placeholder variables (e.g., `OPENAI_MODEL_NAME`, API base URLs).**
+  * **Generate a `requirements.txt` listing `langgraph`, `langchain-openai`, `langchain-sqlite`, `flask`, `python-dotenv`, `pydantic`.**
   * **Include a `.env.example` file.**
-  * **Add clear comments to explain each section of the code.**
+  * **Add clear, concise comments to explain each logical block and important lines of code.**
 
 -----
 
-### **Part 2: Suggested Folder Structure**
+### **Part 2: Suggested Folder Structure (No Change)**
 
 ```
 APES_Project/
@@ -119,187 +156,78 @@ APES_Project/
 ├── requirements.txt
 ├── app.py
 ├── config.py
-├── conversations.db  <-- This file will be generated by SQLiteSaver
+├── conversations.db  <-- This file will be generated by SQLiteSaver upon first run
 ├── agent/
-│   ├── __init__.py
-│   ├── state.py
-│   ├── nodes.py
+│   ├── __init__.py         <-- Collects all tools
+│   ├── state.py            <-- AgentState Pydantic model
+│   ├── nodes.py            <-- LangGraph node functions (call_agent, should_continue)
 │   └── tools/
-│       ├── __init__.py         <-- To collect all @tool functions
-│       ├── api_client.py       <-- Shared API client logic
+│       ├── __init__.py         <-- Can be empty or contain shared tool utilities
+│       ├── api_client.py       <-- Shared API client logic (e.g., base URLs, HTTP client)
 │       ├── id_card_tools.py    <-- @tool functions for ID card APIs
 │       └── member_tools.py     <-- @tool functions for Member APIs
 │           # Add more tool files as needed (e.g., policy_tools.py, claims_tools.py)
 ├── templates/
-│   └── index.html
+│   └── index.html          <-- Basic HTML for chat UI
 └── static/
     ├── css/
-    │   └── style.css  (Optional, for basic styling)
+    │   └── style.css       (Optional, for basic styling)
     └── js/
-        └── script.js  (Optional, for frontend interaction)
+        └── script.js       (Optional, for frontend interaction)
 
+```
 
----------
+--------------
 
-# This would typically be a string in your agent/nodes.py or config.py
+Okay, understood\! It's crucial to pin your dependencies to specific versions for a PoC to ensure reproducibility and avoid unexpected breaking changes.
 
-SYSTEM_PROMPT = """You are a helpful and polite Medicare Assistant. Your primary goal is to assist users with their Medicare ID card and member-related inquiries by leveraging the tools at your disposal.
+Given you're using **Python 3.12.5**, here's a `requirements.txt` with a set of stable and compatible library versions:
 
-Here's how you should operate:
+```
+# requirements.txt
 
-1.  **Understand the User's Request:** Carefully analyze the user's message and the conversation history to understand their core need.
+# LangChain Ecosystem
+# These versions are generally compatible with Python 3.12.x and with each other
+langgraph==0.0.80
+langchain-openai==0.1.13
+langchain-core==0.1.48
+langchain-community==0.0.37 # Often pulled in, but good to explicitly list if needed for specific tools/features
+langchain-sqlite==0.0.1     # For SQLiteSaver persistence
 
-2.  **Utilize Tools (APIs) When Necessary:**
-    * You have access to a suite of specialized tools (functions that interact with Medicare backend systems).
-    * **Always consider if a tool is needed to fulfill the user's request.** If information is required from the Medicare system or an action needs to be performed (like requesting a new ID card), you **must** use the appropriate tool.
-    * **Prioritize using the most specific tool available** for the user's query.
-    * **Extract all necessary parameters** for the chosen tool from the conversation context. If you cannot find a required parameter, ask the user for it clearly.
-    * **Be precise with tool arguments.** Ensure the arguments you pass to the tool exactly match its schema and requirements.
+# Web Framework
+Flask==3.0.3
 
-3.  **Process Tool Outputs:**
-    * After a tool executes, you will receive its output. Analyze this output carefully.
-    * Use the tool's output to formulate a helpful and accurate response to the user.
+# Environment Variable Management
+python-dotenv==1.0.1
 
-4.  **Handle Missing Information/Clarification:**
-    * If the user's query is ambiguous or if you lack a critical piece of information (e.g., a member ID) required by a tool, politely ask the user for clarification. State exactly what information you need.
+# Data Validation (often a dependency of LangChain/Pydantic, explicitly included for clarity)
+pydantic==2.7.4
 
-5.  **Handle Out-of-Scope Queries:**
-    * If a user's request is completely outside the scope of Medicare ID cards or member benefits (i.e., you don't have a tool or internal knowledge to answer it), politely state that you cannot assist with that specific request and offer to help with Medicare-related inquiries.
+# Other utility for JSON parsing/handling (useful with API responses)
+# simplejson is a faster, more flexible drop-in replacement for Python's json module
+simplejson==3.19.2
+```
 
-6.  **Generate User-Friendly Responses:**
-    * Keep your responses clear, concise, and easy for the user to understand.
-    * Maintain a polite and professional tone.
-    * Do not share internal tool names or raw API responses directly with the user. Translate all information into natural, user-friendly language.
-    * If multiple API calls are made, synthesize the information from all relevant tool outputs into a coherent answer.
+### Explanation of Versions:
 
-7.  **Think Step-by-Step (Internal Monologue - for advanced LLMs):**
-    * For complex queries, it can be helpful for you to internally "think" about your reasoning process before deciding on an action or response. (Some LLM models support a `reasoning` or `thought` field in their output when configured, which can be useful for debugging and fine-tuning.)
+  * **LangChain Ecosystem (`langgraph`, `langchain-openai`, `langchain-core`, `langchain-community`, `langchain-sqlite`):** These versions are recent and stable as of late June 2025, and are designed to work together within the LangChain V0.1.x and LangGraph V0.0.x series.
+  * **`Flask`:** Version `3.0.3` is the latest stable release for the Flask 3.x series, which is fully compatible with Python 3.12.
+  * **`python-dotenv`:** Version `1.0.1` is stable and widely used for environment variable management.
+  * **`pydantic`:** Version `2.7.4` is from the Pydantic v2 series, which LangChain v0.1.x relies on. It's stable and compatible with Python 3.12.
+  * **`simplejson` (Optional but Recommended):** While standard `json` module is usually fine, `simplejson` offers better performance and more options for JSON serialization/deserialization, which can be useful when handling numerous API responses.
 
-**Examples of when to use tools (and associated queries):**
-* **`get_id_card_status`**: "What's the status of my ID card?", "Where is my new Medicare card?"
-* **`request_new_id_card`**: "I need a new ID card.", "Can you send me a replacement card?"
-* **`get_member_benefits`**: "What are the benefits of my plan?", "Does my plan cover X?"
-* **`get_dental_coverage_status`**: "Is dental included in my Medicare plan?", "Do I have dental coverage?"
-* **`get_member_status`**: "Am I an active member?", "What's my membership status?"
+### How to use this `requirements.txt`:
 
-**Begin the conversation. I will provide the user's messages and any tool outputs.**
-"""
+1.  **Save the content** above into a file named `requirements.txt` in your `APES_Project/` root directory.
+2.  **Navigate to your project's root directory** in your terminal.
+3.  **It's highly recommended to use a virtual environment** to manage your project's dependencies:
+    ```bash
+    python3.12 -m venv venv
+    source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
+    ```
+4.  **Install the dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-
-
-
-
-
-
-
-
-------------------------------
-You are an expert Python developer working on a PoC project called **APES (AI Powered Enterprise Services)**. Your goal is to implement a LangGraph-based conversational system that allows users to ask ID card–related questions in natural language.
-
-Please generate all the necessary boilerplate and logic for the following:
-
----
-
-📁 **Project Structure**
-Create a modular project with these folders:
-
-- `agents/`: contains `intent_resolver.py` and `response_agent.py`
-- `tools/`: contains `track_id_card.py`, `estimate_id_card.py`, and `request_id_card.py`
-- `orchestrator/`: contains `router.py` and `langgraph_flow.py`
-- `memory/`: contains `memory_manager.py`
-- `state/`: contains `graph_state.py`
-- `mock_api/`: contains `mock_api_server.py` using FastAPI and sample data
-- `config/`: contains `prompt_templates.py` and `settings.py`
-- `test/`: contains unit tests for each module
-- `ui/`: contains a **Flask-based chatbot UI**
-- `main.py`: to invoke the LangGraph end-to-end flow
-
----
-
-🧠 **Functional Flow**
-User enters a query like:
-> "I haven't received my ID card in 5 days, where is it?"
-
-Your system should:
-1. Use an LLM to **classify intent** (e.g., `track_id_card`, `estimate_id_card`, `request_id_card`)
-2. Use memory to **retain context** (multi-turn)
-3. Use an **orchestration layer** to select the correct tool
-4. Call the correct **mock API tool** (track/estimate/request)
-5. Use a **response agent** to generate human-readable replies
-
----
-
-🖥️ **UI Requirements (Flask)**
-- A simple Flask app (`ui/app.py`) that serves a web form
-- Page should have:
-  - An input box for user messages
-  - A scrollable area that shows **conversation history** (previous user + bot messages)
-- History should be maintained **in session or simple in-memory structure** for PoC
-- On submission, the message should:
-  - Trigger the LangGraph pipeline
-  - Display the updated conversation in the same page
-- Bootstrap / minimal styling is fine
-
----
-
-📦 **LLM Calls Required**
-- `intent_resolver.py`: Prompt to classify intent with confidence
-- `response_agent.py`: Prompt to format API response for end-user
-- Use `PydanticOutputParser` for both to parse outputs
-- Optional: `entity_extraction.py` if you want structured slot filling
-
----
-
-📐 **Schemas**
-Please use Pydantic for all of the following models (put them in `schemas.py`):
-
-- `GraphState`: shared LangGraph state
-- `IntentResult`
-- `EntityExtractionResult`
-- `TrackCardInput`, `TrackCardResponse`
-- `EstimateCardInput`, `EstimateCardResponse`
-- `RequestCardInput`, `RequestCardResponse`
-- `FinalBotResponse`
-
----
-
-🔧 **Mock API**
-Use FastAPI in `mock_api/mock_api_server.py` to simulate backend:
-- `GET /idcard/status`
-- `GET /plan/status`
-- `POST /idcard/request`
-
-Return mocked JSON values.
-
----
-
-🧪 **Tests**
-For each component, generate:
-- Unit test for intent resolver
-- Unit test for each tool
-- End-to-end test simulating a full LangGraph run
-
----
-
-📋 **Prompt Templates**
-Create prompt templates in `config/prompt_templates.py` for:
-- Intent classification
-- Response generation
-- Clarification/fallback
-
----
-
-📚 **Tech Stack**
-- Python 3.10+
-- LangChain
-- LangGraph
-- Pydantic
-- FastAPI
-- **Flask (UI only)**
-- OpenAI (gpt-4 or gpt-4o)
-
----
-
-📌 Notes
-- This is a **PoC only**. Do not implement production-grade error handling, logging, or authentication.
-- Focus on **modular, clean code**, and **developer-friendly structure** for handoff.
+This will set up your project environment with the specified stable versions, ensuring a consistent development experience.
