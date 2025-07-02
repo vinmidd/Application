@@ -1,3 +1,5 @@
+https://github.com/langchain-ai/langgraph?tab=readme-ov-file
+
 Yes, I can confirm that the package versions provided in the requirements.txt are indeed supported and compatible with Python 3.12.5.
 
 Here's why those versions were chosen and why they work well with Python 3.12.5:
